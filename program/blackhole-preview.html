@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="author" content="Kieran Schmitt">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BlackHole512</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100svh;padding:24px 16px;background:#000;color:#c8c8c8;font:14px/1.5 system-ui,sans-serif;display:grid;place-items:center}
+main{width:min(100%,600px)}
+canvas{display:block;width:100%;height:auto;background:#000}
+.controls{display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;margin:16px 0}
+label{display:flex;gap:8px;align-items:center}
+button,select{font:inherit;min-height:40px;padding:7px 11px;color:inherit;background:#111;border:1px solid #333;border-radius:4px}
+button:disabled{opacity:.45}
+footer{text-align:center;margin-top:16px}
+</style>
+<main id="bh-motion-preview">
+  <canvas width="300" height="150" role="img" aria-label="Animated disk around a black hole"></canvas>
+  <div class="controls">
+    <button type="button" data-action="play" disabled>Pause animation</button>
+    <button type="button" data-action="restart" disabled>Restart</button>
+    <label>Playback
+      <select data-speed aria-label="Playback speed">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+      </select>
+    </label>
+  </div>
+  <footer>Created by Kieran Schmitt</footer>
+</main>
+<script>
+(function(){
+  const root=document.getElementById("bh-motion-preview");
+  const canvas=root.querySelector("canvas");
+  const context=canvas.getContext("2d");
+  const playButton=root.querySelector('[data-action="play"]');
+  const restartButton=root.querySelector('[data-action="restart"]');
+  const speedInput=root.querySelector('[data-speed]');
+  const source="<body onload=\"with(Math)setInterval((D,i=45e3,r=sqrt)=>{for(;i--;D.data.set([14,16,20,-7].map(D[i]),i*4))if(!D[i]){let x=i%300-150,y=84-i/300,u=0,v,t,p,w=0,q;for(v=p=.02/hypot(x,y),t=500*atan2(.004,-y*v);u*u<=u;)if(u+=v+=u*(u*3-2)/5e5,w+=d=4e-6/(p+v),--t<0)u-=(q=u+v*t)<1/3&q>.08,t+=PI*500;u=q*r(2*q);q=r((1-.08/q)*(1-r(3*q))*u)/(1+u*(x/20.4-q*d/p/99))*4;D[i]=k=>k**3/expm1(k/(q*(8+sin(2*atan(y*5.1/x)-66*log(66+u*(T-w))))||0))}T++;c.getContext`2d`.putImageData(D,0,0)},T=0,new ImageData(300,150))\"><canvas id=c>";
+  const pixels=new ImageData(300,150);
+  // keep pauses and speed changes from skipping ahead
+  const reducedMotion=!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let playing=!reducedMotion;
+  let simulationMs=0,speed=1,last=null,lastPaint=-Infinity,cache=null;
+  function updateControls(){
+    playButton.textContent=playing?'Pause animation':'Play animation';
+  }
+  function paint(){
+    renderCache(cache,simulationMs,pixels.data);
+    context.putImageData(pixels,0,0);
+  }
+  playButton.addEventListener('click',function(){
+    playing=!playing;
+    last=null;
+    updateControls();
+  });
+  restartButton.addEventListener('click',function(){
+    simulationMs=0;last=null;lastPaint=-Infinity;paint();
+  });
+  speedInput.addEventListener('change',function(){
+    speed=Number(speedInput.value);
+    last=null;
+  });
+  document.addEventListener('visibilitychange',function(){last=null});
+  // fixed camera, so trace once and cache the results
+  function buildRayCache(cache=null,maxRays=1000){
+   const count=45000;
+   if(!cache)cache={width:300,height:150,count,next:0,ready:false,values:new Float64Array(count*4)};
+   const end=Math.min(count,cache.next+Math.max(0,Math.floor(maxRays)));
+   for(let i=cache.next;i<end;i++){
+    let x=i%300-150,y=84-i/300,u=0,v,t,p,w=0,q,d;
+    // u = inverse radius, v = its change per angular step
+    for(v=p=.02/Math.hypot(x,y),t=500*Math.atan2(.004,-y*v);u*u<=u;){
+     u+=v+=u*(u*3-2)/5e5;w+=d=4e-6/(p+v);
+     // skip crossings outside the disk, 3 < r < 12.5
+     if(--t<0){u-=(q=u+v*t)<1/3&q>.08;t+=Math.PI*500;}
+    }
+    // reuse the clock step for radial doppler, fade both disk edges
+    u=q*Math.sqrt(2*q);
+    q=Math.sqrt((1-.08/q)*(1-Math.sqrt(3*q))*u)/(1+u*(x/20.4-q*d/p/99))*4;
+    const j=i*4;
+    cache.values[j]=q;
+    cache.values[j+1]=2*Math.atan(y*5.1/x);
+    cache.values[j+2]=u;
+    cache.values[j+3]=w;
+   }
+   cache.next=end;cache.ready=end===count;return cache;
+  }
+  // each ray sees the disk at its own emission time
+  function renderCoordinateTime(cache,T,rgba=new Uint8ClampedArray(cache.count*4)){
+   const a=cache.values;
+   for(let i=cache.count;i--;){
+    const j=i*4;
+    const t=a[j]*(8+Math.sin(a[j+1]-66*Math.log(66+a[j+2]*(T-a[j+3]))))||0;
+    rgba[j]=2744/Math.expm1(14/t);
+    rgba[j+1]=4096/Math.expm1(16/t);
+    rgba[j+2]=8000/Math.expm1(20/t);
+    rgba[j+3]=255;
+   }
+   return rgba;
+  }
+  // five time units per second at 1x
+  function renderCache(cache,elapsedMs,rgba){return renderCoordinateTime(cache,elapsedMs/200,rgba);}
+  function animate(now){
+    if(!root.isConnected)return;
+    if(last!==null&&playing&&!document.hidden)simulationMs+=(now-last)*speed;
+    last=now;
+    if(playing&&!document.hidden&&now-lastPaint>=33){
+      renderCache(cache,simulationMs,pixels.data);
+      context.putImageData(pixels,0,0);
+      lastPaint=now;
+    }
+    requestAnimationFrame(animate);
+  }
+  // batch the rays to keep the page responsive while loading
+  function prepare(){
+    if(!root.isConnected)return;
+    cache=buildRayCache(cache,1500);
+    if(!cache.ready){requestAnimationFrame(prepare);return;}
+    paint();playButton.disabled=false;restartButton.disabled=false;
+    updateControls();requestAnimationFrame(animate);
+  }
+  updateControls();
+  requestAnimationFrame(prepare);
+})();
+</script>
+</html>
